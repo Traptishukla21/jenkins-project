@@ -1,0 +1,51 @@
+pipeline {
+    agent any
+    
+    environment {
+        AWS_ACCESS_KEY_ID = 'your_access_key'
+        AWS_SECRET_ACCESS_KEY = 'your_secret_access_key'
+        AWS_DEFAULT_REGION = 'region_name'
+        ECR_REPO = 'your_repo_url'
+    }
+
+    stages {
+        stage('Pull Code') {
+            steps {
+                git 'https://github.com/your-user/your-repo.git' #your github-repo url using pipeline script
+            }
+        }
+
+         stage('Build & Push to ECR') {
+            steps {
+                sh '''
+                # Build Docker image
+                 docker build -t ecr-repo .
+
+                # Authenticate to ECR
+                aws ecr get-login-password --region "$AWS_DEFAULT_REGION" | docker login --username AWS --password-stdin "$ECR_REPO"
+
+                # Tag image
+                docker tag ecr-repo:latest "$ECR_REPO:new"
+
+                # Push to ECR
+                docker push "$ECR_REPO:new"
+                '''
+            }
+   }
+   stage('Trigger Pipeline 2') {
+            steps {
+                build job: 'Pipeline-2' #job name that you want to trigger
+            }
+        }
+
+        stage('Send Notification') {
+            steps {
+                echo "Build and push successful. Notification sent."
+                  mail to: 'your-email-address', subject: 'Build Success', body: 'Docker image pushed to ECR'
+            }
+        }
+    }
+}
+
+   
+ 
