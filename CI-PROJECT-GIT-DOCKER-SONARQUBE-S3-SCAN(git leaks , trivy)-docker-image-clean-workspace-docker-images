@@ -1,0 +1,108 @@
+# ubuntu machine
+# 2 instance(server) > 1 is jenkins server and 2 is sonarqube server
+# git , docker , maven , git leaks , aws cli , trivy , jenkins install on jenkins server.
+# docker install on sonarqube , through docker install sonarqube (docker run -d --name sonarqube -p 9000:9000 SonarQube)
+# jenkin plugins (git , docker pipeline , maven integration , pipeline , sonarqube scanner , pipeline stage view)
+# sudo usermod -aG docker jenkins
+# vi /etc/sudoers (jenkins entry)
+
+pipeline {
+    agent any
+
+    environment {
+        AWS_ACCESS_KEY_ID = 'your_access_key'
+
+        AWS_SECRET_ACCESS_KEY = 'your_secret_access_key'
+
+        SONARQUBE_SERVER = 'Sonarqube' // name from Jenkins global config
+        AWS_DEFAULT_REGION = 'us-west-1'
+        BUCKET_NAME = 'sonar-jenkins-bucket'
+        ECR_REPO = 'your_ecr_repo'
+    }
+
+    stages {
+        stage('git install') {
+            steps {
+                sh ' sudo apt install git -y '
+            }
+        }
+
+
+        stage('code pull') {
+            steps {
+                git 'https://github.com/Pritam-Khergade/student-ui.git'
+            }
+        }
+        stage('Build with Maven') {
+            steps {
+                // Build inside the current workspace
+                sh 'ls -l'
+                sh 'mvn clean package'
+            }
+        }
+        stage('SonarQube Analysis') {
+            steps {
+                       withSonarQubeEnv(installationName: 'Sonarqube', credentialsId: 'Sonarqube') {
+                 sh '''mvn clean verify sonar:sonar \
+  -Dsonar.projectKey=student-ui '''
+
+                 }
+            }
+        }
+        stage('Upload to S3') {
+            steps {
+                sh '''
+                    S3_BUCKET=sonar-jenkins-bucket
+                    AWS_REGION=us-west-1
+                    
+                    echo "Using bucket: $S3_BUCKET"
+                    ls -lh target/
+
+                    # Upload WAR to S3
+                    aws s3 cp target/*.war s3://$S3_BUCKET/ --region $AWS_REGION
+                '''
+            }
+        }
+        stage('Build image') {
+            steps {
+                sh 'docker build -t ecr-repo .'
+                 
+            }
+        }
+        stage('Scan Docker Image (Trivy)') {
+    steps {
+        script {
+            def imageName = "ecr-repo"
+            sh "trivy image $imageName || true"
+        }
+    }
+}
+                 stage('Push to ECR') {
+                     steps {
+                     sh '''
+                # Authenticate to ECR
+                aws ecr get-login-password --region "$AWS_DEFAULT_REGION" | docker login --username AWS --password-stdin "$ECR_REPO"
+
+                # Tag image
+                docker tag ecr-repo:latest "$ECR_REPO:new"
+
+                # Push to ECR
+                docker push "$ECR_REPO:new"
+                '''
+                 }
+            }
+            
+        stage('Scan for Credentials (GitLeaks)') {
+            steps {
+                sh 'gitleaks detect --source . --report=gitleaks-report.json || true'
+            }
+        }
+
+        stage('Clean Workspace + Docker Volumes/Images') {
+            steps {
+                cleanWs()
+                sh 'docker system prune -af || true'
+            }
+        }
+    }
+}
