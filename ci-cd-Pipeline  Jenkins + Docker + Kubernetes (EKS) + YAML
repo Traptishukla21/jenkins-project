@@ -1,0 +1,66 @@
+pipeline {
+    agent any
+
+    environment {
+        IMAGE_NAME = 'traptishukla21/myapp' 
+        KUBE_CONFIG = credentials('kubeconfig') // if using credentials file
+        AWS_ACCESS_KEY_ID = 'your-access-key'
+        AWS_SECRET_ACCESS_KEY = 'your-secret-access-key'
+    }
+    
+    stages {
+        stage('Clone Repo') {
+            steps {
+                git 'https://github.com/Pritam-Khergade/student-ui.git' #this repo have dockerfile,pom.xml,src,deployment.yaml,service.yaml
+            }
+        }
+
+        stage('Build WAR with Maven') {
+            steps {
+                sh 'mvn clean package'
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    def tag = "${IMAGE_NAME}:${env.BUILD_NUMBER}"
+                    sh "docker build -t ${tag} ."
+                }
+            }
+        }
+
+        stage('Push to Docker Hub') {           # dockerhub credential with username and password
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
+                    script {
+                        sh "echo $PASSWORD | docker login -u $USERNAME --password-stdin"
+                        def tag = "${IMAGE_NAME}:${env.BUILD_NUMBER}"
+                        sh "docker push ${tag}"
+                    }
+                }
+            }
+        }
+
+        stage('Deploy to Kubernetes') {
+    steps {
+        withCredentials([file(credentialsId: 'kubeconfig', variable: 'KUBECONFIG')]) {  # kubeconfig credential using secret file  
+            sh '''
+                # Copy the deployment file to workspace
+                cp /var/lib/jenkins/deployment.yaml .        
+                cp /var/lib/jenkins/service.yaml .          
+                
+                # Replace placeholder image name
+                sed -i 's|IMAGE_NAME|traptishukla21/myapp:2|g' deployment.yaml
+                
+                export KUBECONFIG=$KUBECONFIG
+                
+                # Deploy to Kubernetes
+                kubectl apply -f deployment.yaml  # eks set up is necessary or we can manually create deployment.yaml and service.yaml file
+                kubectl apply -f service.yaml
+            '''
+        }
+    }
+        }
+    }
+}
